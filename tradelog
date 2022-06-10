@@ -1,0 +1,204 @@
+### Projekt 1              ###
+### IOS  2021              ###
+### Autor Kravchuk Marina  ###
+
+#!/usr/bin/env bash
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+print_help()
+{
+	echo "Usage: tradelog [-h|--help]"
+	echo "       tradelog [FILTER] [COMMAND] [LOG...]"
+	echo "COMMAND"
+	echo "       list-tick   - a list of occurring stock exchange symbols, so-called 'ticks'."
+	echo "       profit      - statement of total profit from closed positions."
+	echo "       pos         - list of values ​​of currently held positions sorted in descending order by value."
+	echo "       last-price  - list of the last known price for each ticker."
+	echo "       hist-ord    - list of histogram of the number of transactions according to the ticker."
+	echo "       graph-pos   - list of graph of values ​​of held positions according to the ticker."
+	echo "FILTER"
+	echo "       -a DATETIME - after: only records AFTER this date are considered (without this date)."
+	echo "       -b DATETIME - before: only records BEFORE this date (without this date) are considered."
+	echo "       -t TICKER   - only records corresponding to the given ticker are considered. With multiple occurrences of the switch, the set of all listed ticker is taken."
+	echo "       -w WIDTH    - sets the width of the graph listing, ie the length of the longest line to WIDTH. Thus, WIDTH must be a positive integer. Multiple occurrences of the switch is a faulty start."
+}
+
+COMMAND=""
+WIDTH=""
+TICKER=""
+
+DATE_A=""
+DATE_B=""
+
+GZ_LOG=""
+LOG=""
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	list-tick | pos | profit | last-price | hist-ord | graph-pos)
+		COMMAND="$1"
+		shift
+		;;
+	-h | --help)
+		print_help
+		exit 0
+		;;
+	-w)
+		WIDTH="$2"
+		shift
+		shift
+		;;
+	-t)
+		TICKER="$2 $TICKER"
+		shift
+		shift
+		;;
+	-a)
+		DATE_A="$2 $3"
+		shift
+		shift
+		shift
+		;;
+	-b)
+		DATE_B="$2 $3"
+		shift
+		shift
+		shift
+		;;
+	*.log)
+		LOG="$1 $LOG"
+		shift
+		;;
+	*.gz)
+		GZ_LOG="$1 $GZ_LOG"
+		shift
+		;;
+		
+	esac
+done
+
+if [ "$GZ_LOG" != "" ]; then
+	READ_INPUT="gzip -d -c $GZ_LOG | cat $LOG - | sort"
+else
+	READ_INPUT="cat $LOG"
+fi
+
+if [ "$DATE_A" = "" ]; then
+	DATE_A="0000-00-00 00:00:00"
+fi
+
+if [ "$DATE_B" = "" ]; then
+	DATE_B="9999:99:99 99:99:99"
+fi
+
+OUT_BY_TIME=`eval $READ_INPUT | awk -F';' -v after="$DATE_A" -v before="$DATE_B" '{if($1>after && $1<before){print}}'`
+OUT_BY_TICKER=`eval $READ_INPUT | awk -F';' -v after="$DATE_A" -v before="$DATE_B" '{if($1>after && $1<before){print}}' | awk -F';' -v T="$TICKER" '{split(T, arrayT, " ");for(i in arrayT){if(arrayT[i] == $2){print}}}'`
+
+case "$COMMAND" in
+list-tick)
+	if [ "$TICKER" != "" ]; then
+		echo "$OUT_BY_TICKER" | awk -F';' '{print $2}' | sort -u
+	else
+		echo "$OUT_BY_TIME" | awk -F';' '{print $2}' | sort -u
+	fi
+	;;
+profit)
+        if [ "$TICKER" != "" ]; then
+                echo "$OUT_BY_TICKER" | awk -F';' '{if($3 == "buy")
+							{suma_buy=suma_buy+$4*$6}
+						   else
+							{suma_sell=suma_sell+$4*$6}}
+						    END {suma=suma_sell-suma_buy; printf "%.2f\n", suma}'
+        else
+                echo "$OUT_BY_TIME" | awk -F';' '{if($3 == "buy")
+							{suma_buy=$4*$6+suma_buy}
+						 else
+							{suma_sell=$4*$6+suma_sell}}
+						 END {suma=suma_sell-suma_buy; printf "%.2f\n", suma}'
+        fi
+        ;;
+last-price)
+	if [ "$TICKER" != "" ]; then
+		TIC=`echo "$OUT_BY_TICKER" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+                echo "$OUT_BY_TICKER" | awk -F';' -v T="$TIC" '{split(T, arrayT, " "); 
+								for(i in arrayT)
+									{if(arrayT[i]==$2)
+										{arrayC[i]=$4}}}
+								END {for(i in arrayC)
+									{printf "%-10s:%8s\n", arrayT[i], arrayC[i]}}' | sort
+	else
+		TIC=`echo "$OUT_BY_TIME" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+		echo "$OUT_BY_TIME" | awk -F';' -v T="$TIC" '{split(T, arrayT, " "); 
+							      for(i in arrayT)
+								      {if(arrayT[i]==$2)
+									      {arrayC[i]=$4}}} 
+							      END {for(i in arrayC){printf "%-10s:%8s\n", arrayT[i], arrayC[i]}}' | sort
+	fi
+	;;
+pos)
+	if [ "$TICKER" != "" ]; then
+		TIC=`echo "$OUT_BY_TICKER" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+                echo "$OUT_BY_TICKER" | awk -F';' -v T="$TIC" '{split(T, arrayT, " "); 
+								for(i in arrayT)
+									{if(arrayT[i] == $2)
+										{last[i] = $4;
+										if($3 == "buy")
+											{arrayObjem[i]=$6+arrayObjem[i]}
+										else
+											{arrayObjem[i]=arrayObjem[i]-$6}}}} 
+								END {for(i in arrayT)
+									{arrayObjem[i]=arrayObjem[i]*last[i]; 
+									printf "%-10s: %11.2f\n", arrayT[i], arrayObjem[i]}}' | sort -t ':' -nrk 2
+	else
+		TIC=`echo "$OUT_BY_TIME" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+                echo "$OUT_BY_TIME" | awk -F';' -v T="$TIC" '{split(T, arrayT, " "); 
+							     for(i in arrayT)
+							             {if(arrayT[i] == $2)
+								             {last[i] = $4;
+								             if($3 == "buy")
+										     {arrayObjem[i]=$6+arrayObjem[i]}
+									     else
+										     {arrayObjem[i]=arrayObjem[i]-$6}}}} 
+							     END {for(i in arrayT)
+									{arrayObjem[i] = arrayObjem[i]*last[i]; 
+									printf "%-10s: %11.2f\n", arrayT[i], arrayObjem[i]}}' | sort -t ':' -nrk 2
+	fi
+	;;
+hist-ord)
+	if [ "$TICKER" != "" ]; then
+		TIC=`echo "$OUT_BY_TICKER" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+		COUNT=`echo "$OUT_BY_TICKER" | awk -F';' -v T="$TIC" '{split(T, arrayT, " ");
+									     for(i in arrayT)
+										{if(arrayT[i]==$2)
+											{arrayC[i]=1+arrayC[i]}}}
+								       END {for(i in arrayC)
+										{printf "%-10s:%s\n", arrayT[i], arrayC[i]}}'`
+                echo "$COUNT" | awk -F':' '{printf "%s: ", $1; 
+						for(i=0; i<$2; i++)
+						   {printf "#"}; 
+						printf "\n"}' | sort
+	else
+		TIC=`echo "$OUT_BY_TIME" | awk -F';' '{print $2}' | sort -u | tr '\n' ' '`
+                COUNT=`echo "$OUT_BY_TIME" | awk -F';' -v T="$TIC" '{split(T, arrayT, " "); 
+									   for(i in arrayT)
+										{if(arrayT[i]==$2)
+											{arrayC[i]=1+arrayC[i]}}} 
+								     END {for(i in arrayC)
+									   {printf "%-10s:%s\n", arrayT[i], arrayC[i]}}'`
+		echo "$COUNT" | awk -F':' '{printf "%s: ", $1; 
+						for(i=0; i<$2; i++)
+							{printf "#"}; 
+					    printf "\n"}' | sort
+	fi
+	;;
+*)
+	if [ "$TICKER" != "" ]; then
+		echo "$OUT_BY_TICKER"
+	else
+		echo "$OUT_BY_TIME"
+	fi
+	;;
+esac
+
